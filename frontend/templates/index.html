@@ -1,0 +1,812 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EventFlow Demo</title>
+</head>
+<body>
+
+<h1>EventFlow</h1>
+<p>Simple frontend for Auth and Ticketing microservices.</p>
+
+<h3>Current Session</h3>
+<p id="sessionStatus">Not logged in</p>
+<button type="button" id="logoutBtn">Logout</button>
+
+<hr>
+
+<h2>1. Register</h2>
+
+<p>
+    <input id="regUsername" placeholder="Username">
+    <input id="regEmail" type="email" placeholder="Email">
+    <input id="regPassword" type="password" placeholder="Password">
+</p>
+
+<p>
+    <select id="regRole">
+        <option value="user">User</option>
+        <option value="organizer">Organizer</option>
+    </select>
+</p>
+
+<button type="button" id="registerBtn">Register</button>
+
+<hr>
+
+<h2>2. Login</h2>
+
+<p>
+    <input id="loginEmail" type="email" placeholder="Email">
+    <input id="loginPassword" type="password" placeholder="Password">
+</p>
+
+<button type="button" id="loginBtn">Login</button>
+
+<hr>
+
+<h2>3. Public Events</h2>
+
+<button type="button" id="eventsBtn">View All Events</button>
+
+<pre id="eventsResult"></pre>
+
+<hr>
+
+<h2>4. Create Event (Organizer)</h2>
+
+<p>
+    <input id="eventTitle" placeholder="Event title">
+</p>
+
+<p>
+    <textarea id="eventDescription" placeholder="Description"></textarea>
+</p>
+
+<p>
+    <input id="eventCategory" placeholder="Category">
+    <input id="eventLocation" placeholder="Location">
+</p>
+
+<p>
+    Event start:
+    <input id="eventStart" type="datetime-local">
+</p>
+
+<p>
+    Event end:
+    <input id="eventEnd" type="datetime-local">
+</p>
+
+<button type="button" id="createEventBtn">Create Event</button>
+
+<hr>
+
+<h2>5. Create Ticket Type (Organizer)</h2>
+
+<p>
+    <input id="ticketEventId" type="number" placeholder="Event ID" min="1">
+    <input id="ticketName" placeholder="Ticket name">
+</p>
+
+<p>
+    <input id="ticketPrice" type="number" placeholder="Price" min="0" step="0.01">
+    <input id="ticketStock" type="number" placeholder="Total stock" min="0">
+</p>
+
+<p>
+    Sale start:
+    <input id="saleStart" type="datetime-local">
+</p>
+
+<p>
+    Sale end:
+    <input id="saleEnd" type="datetime-local">
+</p>
+
+<button type="button" id="createTicketBtn">Create Ticket Type</button>
+
+<hr>
+
+<h2>6. Publish Event (Organizer)</h2>
+
+<input id="publishEventId" type="number" placeholder="Event ID" min="1">
+
+<button type="button" id="publishBtn">Publish Event</button>
+
+<hr>
+
+<h2>7. View Ticket Types</h2>
+
+<input id="viewEventId" type="number" placeholder="Event ID" min="1">
+
+<button type="button" id="viewTicketsBtn">View Ticket Types</button>
+
+<pre id="ticketTypesResult"></pre>
+
+<hr>
+
+<h2>8. Order Tickets (User)</h2>
+
+<p>
+    <input id="orderTicketId" type="number" placeholder="Ticket Type ID" min="1">
+    <input id="orderQuantity" type="number" placeholder="Quantity" min="1" max="5" value="1">
+</p>
+
+<button type="button" id="createOrderBtn">Create Order</button>
+
+<hr>
+
+<h2>9. My Orders (User)</h2>
+
+<button type="button" id="myOrdersBtn">View My Orders</button>
+
+<pre id="myOrdersResult"></pre>
+
+<hr>
+
+<h2>10. Manage Orders (Organizer)</h2>
+
+<button type="button" id="organizerOrdersBtn">View Organizer Orders</button>
+
+<pre id="organizerOrdersResult"></pre>
+
+<p>
+    <input id="validateOrderId" type="number" placeholder="Order ID" min="1">
+</p>
+
+<button type="button" id="approveBtn">Approve Order</button>
+
+<p>
+    <input id="rejectionReason" placeholder="Rejection reason">
+</p>
+
+<button type="button" id="rejectBtn">Reject Order</button>
+
+<hr>
+
+<h2>11. Cancel My Order (User)</h2>
+
+<input id="cancelOrderId" type="number" placeholder="Order ID" min="1">
+
+<button type="button" id="cancelOrderBtn">Cancel Pending Order</button>
+
+<hr>
+
+<h2>12. My Issued Tickets (User)</h2>
+
+<button type="button" id="myTicketsBtn">View My Tickets</button>
+
+<pre id="myTicketsResult"></pre>
+
+<hr>
+
+<h2>13. Ticket Check-in (Organizer)</h2>
+
+<input id="checkinCode" placeholder="Ticket code">
+
+<button type="button" id="checkinBtn">Check In</button>
+
+<hr>
+
+<h2>API Response</h2>
+<p>Every request will display its HTTP status and response here.</p>
+
+<pre id="apiOutput">No requests yet.</pre>
+
+<script>
+"use strict";
+
+// --------------------------------------------------
+// 1. CONFIGURATION
+// --------------------------------------------------
+
+// These URLs point to the Flask frontend gateway.
+// The gateway forwards requests to the two backends.
+
+const AUTH_BASE = "/api/auth/auth";
+const TICKETING_BASE = "/api/ticketing";
+
+// Keep JWT only in memory for this local demo.
+let accessToken = null;
+let currentUser = null;
+
+
+// --------------------------------------------------
+// 2. DOM HELPERS
+// --------------------------------------------------
+
+function element(id) {
+    const target = document.getElementById(id);
+
+    if (!target) {
+        throw new Error("Missing HTML element: " + id);
+    }
+
+    return target;
+}
+
+function value(id) {
+    return element(id).value.trim();
+}
+
+function setValue(id, newValue) {
+    element(id).value = newValue;
+}
+
+function positiveInteger(id) {
+    const raw = value(id);
+    const number = Number(raw);
+
+    if (!raw || !Number.isInteger(number) || number <= 0) {
+        throw new Error(id + " must be a positive integer");
+    }
+
+    return number;
+}
+
+function nonnegativeInteger(id) {
+    const raw = value(id);
+    const number = Number(raw);
+
+    if (!raw || !Number.isInteger(number) || number < 0) {
+        throw new Error(id + " must be a nonnegative integer");
+    }
+
+    return number;
+}
+
+function requiredText(id) {
+    const result = value(id);
+
+    if (!result) {
+        throw new Error(id + " is required");
+    }
+
+    return result;
+}
+
+
+function dateValue(id) {
+    const raw = value(id);
+
+    if (!raw) {
+        throw new Error(id + " is required");
+    }
+
+    // datetime-local menghasilkan YYYY-MM-DDTHH:mm
+    // Seluruh input dianggap menggunakan WIB (UTC+7).
+    const date = new Date(raw + ":00+07:00");
+
+    if (Number.isNaN(date.getTime())) {
+        throw new Error("Invalid date: " + id);
+    }
+
+    // Kirim timestamp dengan offset WIB ke backend.
+    return raw + ":00+07:00";
+}
+
+
+function formatWIB(isoString) {
+    return new Intl.DateTimeFormat("id-ID", {
+        timeZone: "Asia/Jakarta",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23"
+    }).format(new Date(isoString)) + " WIB";
+}
+
+// Mengubah semua field datetime dalam respons API.
+function convertDatesToWIB(data) {
+    const dateFields = [
+        "start_at",
+        "end_at",
+        "sale_start",
+        "sale_end",
+        "created_at",
+        "validated_at",
+        "issued_at",
+        "checked_in_at"
+    ];
+
+    if (Array.isArray(data)) {
+        return data.map(convertDatesToWIB);
+    }
+
+    if (data !== null && typeof data === "object") {
+        const result = {};
+
+        for (const [key, item] of Object.entries(data)) {
+            if (
+                dateFields.includes(key) &&
+                typeof item === "string"
+            ) {
+                result[key] = formatWIB(item);
+            } else {
+                result[key] = convertDatesToWIB(item);
+            }
+        }
+
+        return result;
+    }
+
+    return data;
+}
+
+function showResponse(data) {
+    element("apiOutput").textContent =
+        JSON.stringify(convertDatesToWIB(data), null, 2);
+}
+
+function showError(error) {
+    showResponse({
+        error: error.message || String(error)
+    });
+}
+
+function updateSession() {
+    if (!currentUser || !accessToken) {
+        element("sessionStatus").textContent = "Not logged in";
+        return;
+    }
+
+    element("sessionStatus").textContent =
+        "Logged in as " +
+        currentUser.username +
+        " | Role: " + currentUser.role +
+        " | User ID: " + currentUser.id;
+}
+
+
+// --------------------------------------------------
+// 3. API HELPER
+// --------------------------------------------------
+
+async function api(method, url, body = null, extraHeaders = {}) {
+    const headers = { ...extraHeaders };
+
+    if (accessToken) {
+        headers["Authorization"] = "Bearer " + accessToken;
+    }
+
+    if (body !== null) {
+        headers["Content-Type"] = "application/json";
+    }
+
+    const options = {
+        method: method,
+        headers: headers
+    };
+
+    if (body !== null) {
+        options.body = JSON.stringify(body);
+    }
+
+    try {
+        const response = await fetch(url, options);
+        const responseText = await response.text();
+
+        let data;
+
+        try {
+            data = responseText ? JSON.parse(responseText) : {};
+        } catch {
+            data = {
+                message: responseText
+            };
+        }
+
+        showResponse({
+            method: method,
+            endpoint: url,
+            status: response.status,
+            success: response.ok,
+            response: data
+        });
+
+        return {
+            ok: response.ok,
+            status: response.status,
+            data: data
+        };
+
+    } catch (error) {
+        showResponse({
+            method: method,
+            endpoint: url,
+            error: error.message,
+            message: "Cannot connect to the frontend gateway."
+        });
+
+        return {
+            ok: false,
+            status: 0,
+            data: null
+        };
+    }
+}
+
+// Catch validation errors in event handlers.
+async function safeRun(action) {
+    try {
+        await action();
+    } catch (error) {
+        showError(error);
+    }
+}
+
+// Restrict actions in the interface.
+// Backend authorization remains the real security control.
+function requireRole(role) {
+    if (!accessToken || !currentUser) {
+        throw new Error("Please log in first");
+    }
+
+    if (currentUser.role !== role) {
+        throw new Error("This action requires role: " + role);
+    }
+}
+
+
+// --------------------------------------------------
+// 4. AUTHENTICATION
+// --------------------------------------------------
+
+async function registerUser() {
+    const body = {
+        username: requiredText("regUsername"),
+        email: requiredText("regEmail"),
+        password: requiredText("regPassword"),
+        role: value("regRole")
+    };
+
+    const result = await api(
+        "POST",
+        AUTH_BASE + "/register",
+        body
+    );
+
+    if (result.ok) {
+        // Copy credentials into the login form.
+        setValue("loginEmail", body.email);
+        setValue("loginPassword", body.password);
+    }
+}
+
+async function loginUser() {
+    const result = await api(
+        "POST",
+        AUTH_BASE + "/login",
+        {
+            email: requiredText("loginEmail"),
+            password: requiredText("loginPassword")
+        }
+    );
+
+    if (!result.ok || !result.data) {
+        return;
+    }
+
+    if (!result.data.access_token || !result.data.user) {
+        throw new Error("Invalid login response from Auth Service");
+    }
+
+    accessToken = result.data.access_token;
+    currentUser = result.data.user;
+
+    updateSession();
+
+    // Avoid displaying the JWT in the response panel.
+    showResponse({
+        status: result.status,
+        message: "Login successful",
+        user: currentUser,
+        token_received: true
+    });
+}
+
+function logoutUser() {
+    accessToken = null;
+    currentUser = null;
+
+    updateSession();
+
+    showResponse({
+        message: "Local session cleared. Please log in again."
+    });
+}
+
+
+// --------------------------------------------------
+// 5. EVENTS
+// --------------------------------------------------
+
+async function listEvents() {
+    const result = await api(
+        "GET",
+        TICKETING_BASE + "/events"
+    );
+
+    if (result.ok) {
+        element("eventsResult").textContent =
+            JSON.stringify(
+                convertDatesToWIB(result.data.events),
+                null,
+                2
+            );
+    }
+}
+
+async function createEvent() {
+    requireRole("organizer");
+
+    const body = {
+        title: requiredText("eventTitle"),
+        description: requiredText("eventDescription"),
+        category: requiredText("eventCategory"),
+        event_type: "offline",
+        location: requiredText("eventLocation"),
+        start_at: dateValue("eventStart"),
+        end_at: dateValue("eventEnd")
+    };
+
+    const result = await api(
+        "POST",
+        TICKETING_BASE + "/events",
+        body
+    );
+
+    if (result.ok && result.data.event) {
+        const eventId = result.data.event.id;
+
+        setValue("ticketEventId", eventId);
+        setValue("publishEventId", eventId);
+        setValue("viewEventId", eventId);
+    }
+}
+
+async function publishEvent() {
+    requireRole("organizer");
+
+    const eventId = positiveInteger("publishEventId");
+
+    await api(
+        "PATCH",
+        TICKETING_BASE + "/events/" + eventId + "/publish"
+    );
+}
+
+
+// --------------------------------------------------
+// 6. TICKET TYPES
+// --------------------------------------------------
+
+async function createTicketType() {
+    requireRole("organizer");
+
+    const eventId = positiveInteger("ticketEventId");
+
+    const price = requiredText("ticketPrice");
+
+    if (
+        !Number.isFinite(Number(price)) ||
+        Number(price) < 0
+    ) {
+        throw new Error("Invalid ticket price");
+    }
+
+    const body = {
+        name: requiredText("ticketName"),
+        price: price,
+        total_stock: nonnegativeInteger("ticketStock"),
+        sale_start: dateValue("saleStart"),
+        sale_end: dateValue("saleEnd")
+    };
+
+    const result = await api(
+        "POST",
+        TICKETING_BASE + "/events/" + eventId + "/tickets",
+        body
+    );
+
+    if (result.ok && result.data.ticket) {
+        setValue("orderTicketId", result.data.ticket.id);
+    }
+}
+
+async function viewTicketTypes() {
+    const eventId = positiveInteger("viewEventId");
+
+    const result = await api(
+        "GET",
+        TICKETING_BASE + "/events/" + eventId + "/tickets"
+    );
+
+    if (result.ok) {
+        element("ticketTypesResult").textContent =
+            JSON.stringify(result.data.tickets, null, 2);
+    }
+}
+
+
+// --------------------------------------------------
+// 7. ORDERS
+// --------------------------------------------------
+
+async function createOrder() {
+    requireRole("user");
+
+    const ticketTypeId = positiveInteger("orderTicketId");
+    const quantity = positiveInteger("orderQuantity");
+
+    if (quantity > 5) {
+        throw new Error("Maximum 5 tickets per event");
+    }
+
+    // A new UUID is generated for each new order request.
+    const idempotencyKey = crypto.randomUUID();
+
+    const result = await api(
+        "POST",
+        TICKETING_BASE + "/orders",
+        {
+            ticket_type_id: ticketTypeId,
+            quantity: quantity
+        },
+        {
+            "Idempotency-Key": idempotencyKey
+        }
+    );
+
+    if (result.ok && result.data.order) {
+        const orderId = result.data.order.id;
+
+        setValue("validateOrderId", orderId);
+        setValue("cancelOrderId", orderId);
+    }
+}
+
+async function myOrders() {
+    requireRole("user");
+
+    const result = await api(
+        "GET",
+        TICKETING_BASE + "/orders/me"
+    );
+
+    if (result.ok) {
+        element("myOrdersResult").textContent =
+            JSON.stringify(result.data.orders, null, 2);
+    }
+}
+
+async function organizerOrders() {
+    requireRole("organizer");
+
+    const result = await api(
+        "GET",
+        TICKETING_BASE + "/organizer/orders"
+    );
+
+    if (result.ok) {
+        element("organizerOrdersResult").textContent =
+            JSON.stringify(result.data.orders, null, 2);
+    }
+}
+
+async function validateOrder(action) {
+    requireRole("organizer");
+
+    const orderId = positiveInteger("validateOrderId");
+
+    const body = {
+        action: action
+    };
+
+    if (action === "reject") {
+        body.rejection_reason = requiredText("rejectionReason");
+    }
+
+    await api(
+        "PATCH",
+        TICKETING_BASE + "/orders/" + orderId + "/validate",
+        body
+    );
+}
+
+async function cancelOrder() {
+    requireRole("user");
+
+    const orderId = positiveInteger("cancelOrderId");
+
+    await api(
+        "PATCH",
+        TICKETING_BASE + "/orders/" + orderId + "/cancel"
+    );
+}
+
+
+// --------------------------------------------------
+// 8. ISSUED TICKETS
+// --------------------------------------------------
+
+async function myTickets() {
+    requireRole("user");
+
+    const result = await api(
+        "GET",
+        TICKETING_BASE + "/tickets/me"
+    );
+
+    if (result.ok) {
+        element("myTicketsResult").textContent =
+            JSON.stringify(result.data.tickets, null, 2);
+    }
+}
+
+async function checkIn() {
+    requireRole("organizer");
+
+    await api(
+        "POST",
+        TICKETING_BASE + "/tickets/check-in",
+        {
+            ticket_code: requiredText("checkinCode")
+        }
+    );
+}
+
+
+// --------------------------------------------------
+// 9. BUTTON EVENT LISTENERS
+// --------------------------------------------------
+
+// Using addEventListener avoids naming conflicts
+// between functions and browser globals.
+
+function connectButton(buttonId, action) {
+    element(buttonId).addEventListener("click", function () {
+        safeRun(action);
+    });
+}
+
+connectButton("registerBtn", registerUser);
+connectButton("loginBtn", loginUser);
+connectButton("logoutBtn", logoutUser);
+
+connectButton("eventsBtn", listEvents);
+connectButton("createEventBtn", createEvent);
+connectButton("publishBtn", publishEvent);
+
+connectButton("createTicketBtn", createTicketType);
+connectButton("viewTicketsBtn", viewTicketTypes);
+
+connectButton("createOrderBtn", createOrder);
+connectButton("myOrdersBtn", myOrders);
+connectButton("organizerOrdersBtn", organizerOrders);
+
+connectButton("approveBtn", function () {
+    return validateOrder("approve");
+});
+
+connectButton("rejectBtn", function () {
+    return validateOrder("reject");
+});
+
+connectButton("cancelOrderBtn", cancelOrder);
+
+connectButton("myTicketsBtn", myTickets);
+connectButton("checkinBtn", checkIn);
+
+updateSession();
+
+</script>
+
+</body>
+</html>
