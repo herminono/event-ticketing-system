@@ -5,3 +5,4 @@ Flask-JWT-Extended[asymmetric_crypto]>=4.7,<5
 psycopg[binary]>=3.2,<4
 python-dotenv>=1,<2
 pytest>=8,<10
+Flask-Limiter
