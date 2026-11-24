@@ -4,6 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from config import get_config
 from extensions import db, migrate, jwt,limiter
 from helpers import ApiError
+from cron_routes import cron_bp
 
 def create_app(test_config=None):
     app = Flask(__name__)
@@ -27,6 +28,7 @@ def create_app(test_config=None):
     app.register_blueprint(event_bp)
     app.register_blueprint(ticket_bp)
     app.register_blueprint(order_bp)
+    app.register_blueprint(cron_bp)
     @app.errorhandler(ApiError)
     def handle_api_error(error):
         db.session.rollback()
@@ -55,7 +57,7 @@ def create_app(test_config=None):
     @app.get("/")
     def index():
         return {
-            "service": "Ticketing Service",
+            "service": "EventFlow Ticketing Service",
             "version": "1.0.0",
             "status": "running"
         }, 200

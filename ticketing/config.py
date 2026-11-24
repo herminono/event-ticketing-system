@@ -40,4 +40,6 @@ def get_config():
         "RATELIMIT_ENABLED": True,
         "RATELIMIT_STORAGE_URI": os.getenv("RATELIMIT_STORAGE_URI", "memory://"),
         "RATELIMIT_HEADERS_ENABLED": True,
+        "ORDER_EXPIRATION_MINUTES": int(os.getenv("ORDER_EXPIRATION_MINUTES", "30")),
+        "CRON_SECRET": os.getenv("CRON_SECRET", ""),
     }

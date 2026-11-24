@@ -23,6 +23,7 @@ from helpers import (
 from extensions import limiter
 from rate_limit import verified_user_key
 from audit import record_audit
+from expiration import expire_event_orders
 
 ticket_bp = Blueprint("tickets",__name__)
 
@@ -31,20 +32,23 @@ ticket_bp = Blueprint("tickets",__name__)
 @ticket_bp.get("/events/<int:event_id>/tickets")
 @jwt_required(optional=True)
 def list_ticket_types(event_id):
-    event = db.session.get(Event, event_id)
-    if not event:
-        raise ApiError(404,"Event not found")
-    is_owner = False
-    if get_jwt().get("role") == "organizer":
-        is_owner=(
-            event.organizer_id == current_user_id()
+    with db.session.begin():
+        event = db.session.scalar(
+            select(Event).where(Event.id == event_id).with_for_update()
         )
-    if event.status=="draft" and not is_owner:
-        raise ApiError(409,"Event not found")
-    tickets=db.session.scalars(
-        select(TicketType).where(TicketType.event_id == event_id).order_by(TicketType.id)
-    ).all()
-    return{"tickets":[ticket_type_to_dict(ticket) for ticket in tickets]},200
+        if not event:
+            raise ApiError(404, "Event not found")
+        is_owner = False
+        if get_jwt().get("role") == "organizer":
+            is_owner = event.organizer_id == current_user_id()
+        if event.status == "draft" and not is_owner:
+            raise ApiError(404, "Event not found")
+        expire_event_orders(event_id)
+        tickets = db.session.scalars(
+            select(TicketType).where(TicketType.event_id == event_id).order_by(TicketType.id)
+        ).all()
+        result = [ticket_type_to_dict(ticket) for ticket in tickets]
+    return {"tickets": result}, 200
 
 #Create ticket types
 #harga akan tetap setelah tiket dibuat. Nmama dinormalisasi ke uppercase agar "Regular" dan "regular" tidak menjadi dua kategori berbeda.
@@ -53,7 +57,8 @@ def list_ticket_types(event_id):
 @role_required("organizer")
 def create_ticket_type(event_id):
     data = require_json()
-    name = text_field(data.get("name"),"name",50).upper()
+    name = text_field(data.get("name"), "name", 50)
+    name = text_field(name.upper(), "name", 50)
     price=parse_price(data.get("price"))
     total_stock=nonnegative_int(data.get("total_stock"),"total_stock")
     sale_start=parse_datetime(data.get("sale_start"))
@@ -97,18 +102,25 @@ def update_ticket_stock(ticket_id):
     data = require_json()
     total_stock=nonnegative_int(data.get("total_stock"),"total_stock")
     with db.session.begin():
-        preview = db.session.get(TicketType, ticket_id)
-        if not preview:
-            raise ApiError(404,"Ticket not found")
-        event=db.session.scalar(
-            select(Event).where(Event.id==preview.event_id).with_for_update()
+        event_id = db.session.scalar(
+            select(TicketType.event_id).where(TicketType.id == ticket_id)
+        )
+        if event_id is None:
+            raise ApiError(404, "Ticket not found")
+        event = db.session.scalar(
+            select(Event).where(Event.id == event_id)
+            .with_for_update().execution_options(populate_existing=True)
         )
         if not event:
-            raise ApiError(404,"Event not found")
+            raise ApiError(404, "Event not found")
         require_event_owner(event)
-        ticket =db.session.scalar(
-            select(TicketType).where(TicketType.id==ticket_id).with_for_update()
+        expire_event_orders(event.id)
+        ticket = db.session.scalar(
+            select(TicketType).where(TicketType.id == ticket_id)
+            .with_for_update().execution_options(populate_existing=True)
         )
+        if not ticket:
+            raise ApiError(404, "Ticket not found")
         if event.status=="canceled":
             raise ApiError(409,"Event already canceled")
         if event.start_at <= utc_now():
@@ -193,7 +205,7 @@ def check_in_ticket():
         result={
             "ticket_code": issued.ticket_code,
             "status": issued.status,
-            "checked_in_at": now.isoformat()
+            "checked_in_at": wib_iso(now)
         }
     return {
         "message":"Check-in successful",

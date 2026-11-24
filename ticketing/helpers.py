@@ -76,13 +76,14 @@ def require_ticket_access(order,event):
         raise ApiError(404, "Ticket not found")
 
 #validasi input
+MAX_INTEGER = 2_147_483_647
 def positive_int(value,field):
-    if type(value)is not int or value <= 0:
+    if type(value)is not int or not 1 <=value<= MAX_INTEGER:
         raise ApiError(400, f"{field} must be in positive integer")
     return value
 
 def nonnegative_int(value,field):
-    if type(value)is not int or value < 0:
+    if type(value)is not int or not 0<= value<=MAX_INTEGER:
         raise ApiError(400, f"{field} must be in nonnegative integer")
     return value
 
@@ -125,12 +126,22 @@ def validate_event_type(event_type,location,meeting_url):
     if event_type not in ("online","offline"):
         raise ApiError(400,"Invalid event type")
     if event_type == "offline":
-        location = text_field(location,"location",255)
+        location = text_field(location,"location",225)
         meeting_url = None
     else:
         location = None
         meeting_url = text_field(meeting_url,"meeting_url",500)
-        parsed = urlsplit(meeting_url)
+        try:
+            parsed = urlsplit(meeting_url)
+        except ValueError:
+            raise ApiError(400, "Invalid meeting URL")
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ApiError(400,"Meeting URL must be HTTPS")
         if parsed.scheme != "https" or not parsed.hostname or parsed.username is not None or parsed.password is not None:
             raise ApiError(400,"Meeting URL must be HTTPS")
     return location,meeting_url
@@ -186,7 +197,8 @@ def order_to_dict(order):
         "rejection_reason": order.rejection_reason,
         "validated_by": order.validated_by,
         "validated_at": wib_iso(order.validated_at),
-        "created_at": wib_iso(order.created_at)
+        "created_at": wib_iso(order.created_at),
+        "expires_at": wib_iso(order.expires_at),
     }
 
 def issued_ticket_to_dict(ticket,order,event,ticket_type):

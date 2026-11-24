@@ -4,10 +4,11 @@ from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from sqlalchemy import select,func
 from extensions import db
 from models import Event, TicketType, Order, IssuedTicket
-from helpers import ApiError, utc_now, require_json, role_required, require_event_owner, current_user_id, text_field, parse_datetime,validate_event_type,event_to_dict
+from helpers import ApiError, utc_now, require_json, role_required, require_event_owner, current_user_id, text_field, parse_datetime,validate_event_type,event_to_dict, WIB
 from extensions import limiter
 from rate_limit import verified_user_key
 from audit import record_audit
+from expiration import expire_event_orders
 
 event_bp = Blueprint('events', __name__)
 
@@ -85,8 +86,12 @@ def list_events():
             selected = date.fromisoformat(event_date)
         except ValueError:
             raise ApiError(400,"Invalid date")
-        day_start = datetime.combine(selected,time.min,tzinfo=timezone.utc)
+        day_start = datetime.combine(selected,time.min,tzinfo=WIB)
         day_end = day_start + timedelta(days=1)
+        filters.extend([
+            Event.start_at < day_end,
+            Event.end_at > day_start
+        ])
         #event yang berlangsung beberapa hari akan tetap muncul selama tanggal
         #pencarian berada dalam periode event
         filters.extend([Event.start_at < day_end,Event.end_at >= day_start])
@@ -242,6 +247,7 @@ def cancel_event(event_id):
         require_event_owner(event)
         if event.status == "canceled":
             raise ApiError(409, "Event already canceled")
+        expire_event_orders(event_id)
         ticket_types = db.session.scalars(
             select(TicketType).where(TicketType.event_id==event_id).order_by(TicketType.id).with_for_update()
         ).all()

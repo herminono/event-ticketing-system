@@ -2,8 +2,9 @@ import hashlib
 import json
 import secrets
 import uuid
-from flask import Blueprint, request
+from flask import Blueprint, request, current_app
 from flask_jwt_extended import jwt_required, get_jwt
+from datetime import timedelta
 from sqlalchemy import select,func
 from sqlalchemy.dialects.postgresql import insert
 from extensions import db
@@ -13,6 +14,7 @@ from helpers import ApiError, utc_now, require_event_owner, require_json, role_r
 from extensions import limiter
 from rate_limit import verified_user_key
 from audit import record_audit
+from expiration import expire_locked_order,expire_event_orders,expire_matching_orders
 
 order_bp = Blueprint('orders',__name__)
 
@@ -25,13 +27,13 @@ def lock_order_resources(order_id):
         raise ApiError(404,'Order not found')
     event_id, ticket_type_id = preview
     event = db.session.scalar(
-        select(Event).where(Event.id==event_id).with_for_update()
+        select(Event).where(Event.id==event_id).with_for_update().execution_options(populate_existing=True)
     )
     ticket_type = db.session.scalar(
-        select(TicketType).where(TicketType.id==ticket_type_id).with_for_update()
+        select(TicketType).where(TicketType.id==ticket_type_id).with_for_update().execution_options(populate_existing=True)
     )
     order = db.session.scalar(
-        select(Order).where(Order.id==order_id).with_for_update()
+        select(Order).where(Order.id==order_id).with_for_update().execution_options(populate_existing=True)
     )
     if (
         not event
@@ -112,15 +114,23 @@ def create_order():
             response_body = record.response_body
             response_status = record.response_status
         else:
-            preview = db.session.get(TicketType,ticket_type_id)
-            if not preview:
-                raise ApiError(404,"Ticket type not found")
-            event = db.session.scalar(
-                select(Event).where(Event.id==preview.event_id).with_for_update()
+            event_id = db.session.scalar(
+                select(TicketType.event_id).where(TicketType.id == ticket_type_id)
             )
+            if event_id is None:
+                raise ApiError(404, "Ticket type not found")
+            event = db.session.scalar(
+                select(Event).where(Event.id == event_id)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+            if not event:
+                raise ApiError(404, "Event not found")
+
+            expire_event_orders(event.id)
             ticket_type = db.session.scalar(
                 select(TicketType).where(TicketType.id==ticket_type_id).with_for_update().execution_options(populate_existing=True)
             )
+
             if not event or not ticket_type:
                 raise ApiError(404,"Ticket type not found")
             if event.status != "published":
@@ -156,6 +166,7 @@ def create_order():
                 quantity=quantity,
                 total_price=ticket_type.price*quantity,
                 status="pending",
+                expires_at=min(now+timedelta(minutes=current_app.config["ORDER_EXPIRATION_MINUTES"]),event.start_at)
             )
             db.session.add(order)
             db.session.flush()
@@ -175,21 +186,33 @@ def create_order():
 @order_bp.get("/orders/me")
 @role_required("user")
 def my_orders():
-    orders = db.session.scalars(
-        select(Order).where(Order.user_id == current_user_id()).order_by(Order.created_at.desc())
-    ).all()
-    return{"orders":[order_to_dict(order) for order in orders]},200
+    user_id = current_user_id()
+    with db.session.begin():
+        expire_matching_orders(Order.user_id==user_id)
+        orders = db.session.scalars(
+            select(Order).where(Order.user_id == user_id).order_by(Order.created_at.desc())
+        ).all()
+        result=[order_to_dict(order) for order in orders]
+    return{"orders":result},200
 
 #Get specific order
 @order_bp.get("/orders/<int:order_id>")
 @jwt_required()
 def get_order(order_id):
-    order = db.session.get(Order, order_id)
-    if not order:
-        raise ApiError(404, "Order not found")
-    event = db.session.get(Event, order.event_id)
-    require_order_access(order,event)
-    return {"order":order_to_dict(order)}, 200
+    with db.session.begin():
+        event, ticket_type, order = lock_order_resources(order_id)
+        user_id = current_user_id()
+        role = get_jwt().get("role")
+        authorized = (
+            (role == "user" and order.user_id == user_id)
+            or
+            (role == "organizer" and event.organizer_id == user_id)
+        )
+        if not authorized:
+            raise ApiError(403, "Forbidden")
+        expire_locked_order(order,ticket_type,utc_now())
+        result = order_to_dict(order)
+    return {"order": result}, 200
 
 #Get list orders (organizer)
 #organizer hanya bisa melihat order dari event miliknya sendiri.
@@ -197,23 +220,27 @@ def get_order(order_id):
 @role_required("organizer")
 def organizer_orders():
     status = request.args.get("status")
-    query = (
-        select(Order).join(Event, Order.event_id == Event.id).where(Event.organizer_id == current_user_id())
-    )
-    if status:
-        allowed_status={
-            "pending",
-            "confirmed",
-            "rejected",
-            "canceled"
-        }
-        if status not in allowed_status:
-            raise ApiError(409,"Invalid order status")
-        query=query.where(Order.status==status)
-    orders = db.session.scalars(
-        query.order_by(Order.created_at.desc())
-    ).all()
-    return{"orders":[order_to_dict(order) for order in orders]},200
+    organizer_id = current_user_id()
+    allowed_status={
+        "pending",
+        "confirmed",
+        "rejected",
+        "canceled",
+        "expired"
+    }
+    if status and status not in allowed_status:
+        raise ApiError(400,"Invalid order status")
+    with db.session.begin():
+        owned_events=select(Event.id).where(Event.organizer_id == organizer_id)
+        expire_matching_orders(Order.event_id.in_(owned_events))
+        query=(
+            select(Order).join(Event,Order.event_id==Event.id).where(Event.organizer_id == organizer_id)
+        )
+        if status:
+            query = query.where(Order.status==status)
+        orders = db.session.scalars(query.order_by(Order.created_at.desc())).all()
+        result = [order_to_dict(order) for order in orders]
+    return{"orders":result},200
 
 #Cancel order
 #HANYA pending order yang boleh dibatalkan. Reserved stock dikembalikan tepat satu kali.
@@ -224,6 +251,10 @@ def cancel_order(order_id):
         event, ticket_type, order = lock_order_resources(order_id)
         if order.user_id != current_user_id():
             raise ApiError(403,"Forbidden")
+        if expire_locked_order(order,ticket_type,utc_now()):
+            return{"error":"Order has expired"}, 409
+        if order.status == "expired":
+            return {"error": "Order has expired"},409
         if order.status != "pending":
             raise ApiError(409,"Order cant be canceled")
         ticket_type.reserved_stock -= order.quantity
@@ -249,11 +280,16 @@ def validate_order(order_id):
     with db.session.begin():
         event,ticket_type,order = lock_order_resources(order_id)
         require_event_owner(event)
+        now = utc_now()
+        if expire_locked_order(order,ticket_type,now):
+            return {"error":"Order has expired"},409
+        if order.status == "expired":
+            return{"error":"Order has expired"},409
         if event.status != "published":
             raise ApiError(409,"Event is not published")
         if order.status != "pending":
             raise ApiError(409,"Order has already been processed")
-        now = utc_now()
+
         if action == "approve":
             if now >= event.start_at:
                 raise ApiError(409,"Event has started")

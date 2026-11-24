@@ -88,13 +88,13 @@ class Order(db.Model):
     event_id:Mapped[int]=mapped_column(ForeignKey("events.id"),nullable=False,index=True)
     ticket_type_id:Mapped[int]=mapped_column(ForeignKey("ticket_types.id"),nullable=False)
     quantity:Mapped[int]=mapped_column(nullable=False)
-    total_price:Mapped[Decimal]=mapped_column(db.Numeric(12,2),nullable=False)
+    total_price:Mapped[Decimal]=mapped_column(db.Numeric(13,2),nullable=False)
     status:Mapped[str]=mapped_column(db.String(20),default="pending",nullable=False)
     rejection_reason:Mapped[str|None]=mapped_column(db.Text,nullable=True)
     validated_at:Mapped[datetime|None]=mapped_column(db.DateTime(timezone=True),nullable=True)
     validated_by: Mapped[int|None]= mapped_column(nullable=True)
     created_at:Mapped[datetime]=mapped_column(db.DateTime(timezone=True),default=utc_now,nullable=False)
-
+    expires_at:Mapped[datetime] = mapped_column(db.DateTime(timezone=True),nullable=False)
     __table_args__ =(
         CheckConstraint(
             "quantity>0",
@@ -105,7 +105,7 @@ class Order(db.Model):
             name="ck_order_total"
         ),
         CheckConstraint(
-            "status IN ('pending','confirmed','rejected','canceled')",
+            "status IN ('pending','confirmed','rejected','canceled','expired')",
             name="ck_order_status"
         ),
         #satu user hanya boleh punya satu pending order dalam satu event.
@@ -114,6 +114,12 @@ class Order(db.Model):
             "user_id","event_id",
             unique=True,
             postgresql_where=text("status ='pending'")
+        ),
+        Index(
+            "ix_pending_order_expiration",
+            "expires_at",
+            "event_id",
+            postgresql_where=text("status='pending'")
         )
     )
 
