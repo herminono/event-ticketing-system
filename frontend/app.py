@@ -4,15 +4,92 @@ import requests
 
 app = Flask(__name__)
 
-AUTH_URL = "https://event-ticketing-system-pearl.vercel.app/"
-TICKETING_URL = "https://event-ticketing-system-qi1m.vercel.app/"
+AUTH_URL = "https://event-ticketing-system-pearl.vercel.app"
+TICKETING_URL = "https://event-ticketing-system-qi1m.vercel.app"
 
 
 @app.get("/")
 def home():
     return render_template("index.html")
 
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    message = None
 
+    if request.method == "POST":
+        try:
+            response = requests.post(
+                f"{AUTH_URL}/auth/forgot-password",
+                json={"email": request.form.get("email")},
+                timeout=10
+            )
+
+            data = response.json()
+            message = data.get("message") or data.get("error")
+
+        except (requests.RequestException, ValueError):
+            message = "Authentication Service is unavailable."
+
+    return render_template(
+        "reset_password.html",
+        message=message
+    )
+@app.route("/reset-password", methods=["GET", "POST"])
+def reset_password():
+    token = request.values.get("token")
+    message = None
+    valid = False
+
+    if not token:
+        return render_template(
+            "reset_password.html",
+            message="Please request a password reset link."
+        )
+
+    try:
+        response = requests.get(
+            f"{AUTH_URL}/auth/reset-password",
+            params={"token": token},
+            timeout=10
+        )
+
+        valid = response.status_code == 200
+
+        if request.method == "POST" and valid:
+            password = request.form.get("new_password")
+            confirmation = request.form.get("confirm_password")
+
+            if password != confirmation:
+                message = "Passwords do not match."
+
+            else:
+                response = requests.post(
+                    f"{AUTH_URL}/auth/reset-password",
+                    json={
+                        "token": token,
+                        "new_password": password
+                    },
+                    timeout=10
+                )
+
+                data = response.json()
+                message = data.get("message") or data.get("error")
+
+                if response.status_code == 200:
+                    return render_template(
+                        "reset_password.html",
+                        message=message
+                    )
+
+    except (requests.RequestException, ValueError):
+        message = "Authentication Service is unavailable."
+
+    return render_template(
+        "reset_password.html",
+        token=token,
+        valid=valid,
+        message=message
+    )
 def forward_request(base_url, path):
     url = f"{base_url}/{path}"
 
@@ -60,6 +137,8 @@ def auth_proxy(path):
 )
 def ticketing_proxy(path):
     return forward_request(TICKETING_URL, path)
+
+
 
 
 if __name__ == "__main__":
