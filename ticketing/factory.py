@@ -55,7 +55,7 @@ def create_app(test_config=None):
     @app.get("/")
     def index():
         return {
-            "service": "EventFlow Ticketing Service",
+            "service": "Ticketing Service",
             "version": "1.0.0",
             "status": "running"
         }, 200
