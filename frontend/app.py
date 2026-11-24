@@ -4,8 +4,8 @@ import requests
 
 app = Flask(__name__)
 
-AUTH_URL = "http://127.0.0.1:8001"
-TICKETING_URL = "http://127.0.0.1:8002"
+AUTH_URL = "https://event-ticketing-system-pearl.vercel.app/"
+TICKETING_URL = "https://event-ticketing-system-qi1m.vercel.app/"
 
 
 @app.get("/")
